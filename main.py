@@ -1,42 +1,41 @@
 from fastapi import FastAPI, Request
-import logging
+from fastapi.responses import JSONResponse
 import httpx
 
 app = FastAPI()
-logging.basicConfig(level=logging.INFO)
 
-# Храним обработанные заказы (предотвращает дубликаты)
-processed_orders = set()
-
-# 🔹 Вставь сюда свой Webhook Make
 MAKE_WEBHOOK_URL = "https://hook.eu2.make.com/p9ugnp2wopa4yd2g3mbskexbgkgs6770"
+
+# In-memory set to store processed order references
+processed_orders = set()
 
 @app.post("/")
 async def wayforpay_webhook(request: Request):
     try:
         data = await request.json()
-        order_ref = data.get("orderReference")  # ID заказа
+
+        order_ref = data.get("orderReference")
 
         if not order_ref:
-            logging.error("Missing orderReference in request data")
-            return {"status": "error", "message": "Missing orderReference"}, 400
+            return JSONResponse(content={"status": "error", "details": "Missing orderReference"}, status_code=400)
 
+        # Check for duplicates
         if order_ref in processed_orders:
-            logging.warning(f"Duplicate request detected: {order_ref}")
-            return {"status": "OK"}  # Отвечаем OK, чтобы WayForPay не ретраил
-
-        logging.info(f"Processing new transaction: {order_ref}")
-
-        # ✅ Отправляем данные в Make в правильном JSON-формате
-        payload = {"json": data}  # Теперь Make получит объект в `json`
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(MAKE_WEBHOOK_URL, json=payload)
-            logging.info(f"Response from Make: {response.status_code} {response.text}")
+            print(f"Ignored duplicate orderReference: {order_ref}")
+            return JSONResponse(content={"status": "duplicate_ignored"}, status_code=200)
 
         processed_orders.add(order_ref)
 
-        return {"status": "OK"}  # WayForPay прекратит повторные отправки
+        # Log received data
+        print("Received data:", data)
+
+        # Send to Make
+        async with httpx.AsyncClient() as client:
+            response = await client.post(MAKE_WEBHOOK_URL, json=data)
+            print("Response from Make:", response.status_code, response.text)
+
+        return JSONResponse(content={"status": "ok"}, status_code=200)
+
     except Exception as e:
-        logging.error(f"Error processing request: {e}")
-        return {"status": "error", "message": str(e)}, 500
+        print("Error:", e)
+        return JSONResponse(content={"status": "error", "details": str(e)}, status_code=500)
